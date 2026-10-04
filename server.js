@@ -2,22 +2,20 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-// In-memory storage
-// rooms = { "mainacchere": { stands: {}, commands: [], pollers: [] } }
 let rooms = {};
 
 function getRoom(roomName) {
     if (!rooms[roomName]) {
         rooms[roomName] = {
-            stands: {},      // "StandUsername": { lastBeat: 169000000 }
-            commands: [],    // { target: "Stand1", command: ".summon", timestamp: 169000000 }
-            pollers: []      // Waiting GET /poll requests
+            stands: {},      
+            commands: [],    
+            pollers: []      
         };
     }
     return rooms[roomName];
 }
 
-// 1. Owner GUI fetches active stands
+// 1. Owner GUI fetches active stands in their room
 app.get('/roster', (req, res) => {
     const roomName = req.query.room;
     if (!roomName) return res.json({ stands: [] });
@@ -27,20 +25,25 @@ app.get('/roster', (req, res) => {
     let now = Date.now();
     
     for (let [name, data] of Object.entries(room.stands)) {
-        if (now - data.lastBeat < 10000) { // 10 seconds timeout
+        if (now - data.lastBeat < 10000) { 
             activeStands.push(name);
         }
     }
     res.json({ stands: activeStands });
 });
 
-// 2. Stand sends heartbeat every 3 seconds
+// 2. Stand sends heartbeat every 3 seconds (NOW INCLUDES GAME INFO)
 app.post('/beat', (req, res) => {
-    const { room, username } = req.body;
+    const { room, username, gameId, jobId, gameName } = req.body;
     if (!room || !username) return res.status(400).json({ error: "Missing data" });
     
     const r = getRoom(room);
-    r.stands[username] = { lastBeat: Date.now() };
+    r.stands[username] = { 
+        lastBeat: Date.now(),
+        gameId: gameId,
+        jobId: jobId,
+        gameName: gameName || "Unknown Game"
+    };
     res.json({ success: true });
 });
 
@@ -53,10 +56,8 @@ app.post('/send', (req, res) => {
     let cmdData = { target: target, command: command, timestamp: Date.now() };
     r.commands.push(cmdData);
     
-    // Clean up old commands (keep last 100)
     if (r.commands.length > 100) r.commands.shift();
     
-    // Resolve any pending long-pollers immediately
     r.pollers.forEach(poller => {
         clearTimeout(poller.timeout);
         poller.res.json({ commands: [cmdData], cursor: Date.now() });
@@ -75,7 +76,6 @@ app.get('/poll', (req, res) => {
     if (!roomName || !username) return res.status(400).json({ error: "Missing data" });
     const room = getRoom(roomName);
     
-    // Check for commands newer than the cursor for this specific stand or "ALL"
     let newCmds = room.commands.filter(cmd => 
         cmd.timestamp > cursor && (cmd.target === username || cmd.target === "ALL")
     );
@@ -84,14 +84,33 @@ app.get('/poll', (req, res) => {
         return res.json({ commands: newCmds, cursor: Date.now() });
     }
     
-    // Long polling: Wait up to 25 seconds for a new command
     const timeout = setTimeout(() => {
         res.json({ commands: [], cursor: Date.now() });
-        // Remove this poller from the list
         room.pollers = room.pollers.filter(p => p.res !== res);
     }, 25000);
     
     room.pollers.push({ res: res, username: username, timeout: timeout });
+});
+
+// 5. NEW: Global Roster for Owner (Shows all stands across all servers)
+app.get('/global-roster', (req, res) => {
+    let globalStands = [];
+    let now = Date.now();
+    
+    for (let roomName in rooms) {
+        let room = rooms[roomName];
+        for (let name in room.stands) {
+            if (now - room.stands[name].lastBeat < 10000) {
+                globalStands.push({
+                    username: name,
+                    gameId: room.stands[name].gameId,
+                    jobId: room.stands[name].jobId,
+                    gameName: room.stands[name].gameName
+                });
+            }
+        }
+    }
+    res.json({ stands: globalStands });
 });
 
 const PORT = process.env.PORT || 3000;
