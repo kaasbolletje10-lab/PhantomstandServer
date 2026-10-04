@@ -6,106 +6,75 @@ let rooms = {};
 
 function getRoom(roomName) {
     if (!rooms[roomName]) {
-        rooms[roomName] = {
-            stands: {},      
-            commands: [],    
-            pollers: []      
-        };
+        rooms[roomName] = { stands: {}, commands: [], pollers: [] };
     }
     return rooms[roomName];
 }
 
-// 1. Owner GUI fetches active stands in their room
 app.get('/roster', (req, res) => {
     const roomName = req.query.room;
     if (!roomName) return res.json({ stands: [] });
-    
     const room = getRoom(roomName);
     let activeStands = [];
     let now = Date.now();
-    
     for (let [name, data] of Object.entries(room.stands)) {
         if (now - data.lastBeat < 10000) { 
-            activeStands.push(name);
+            activeStands.push({ name: name, userId: data.userId });
         }
     }
     res.json({ stands: activeStands });
 });
 
-// 2. Stand sends heartbeat every 3 seconds (NOW INCLUDES GAME INFO)
 app.post('/beat', (req, res) => {
-    const { room, username, gameId, jobId, gameName } = req.body;
+    const { room, username, userId, gameId, jobId, gameName } = req.body;
     if (!room || !username) return res.status(400).json({ error: "Missing data" });
-    
     const r = getRoom(room);
     r.stands[username] = { 
-        lastBeat: Date.now(),
-        gameId: gameId,
-        jobId: jobId,
-        gameName: gameName || "Unknown Game"
+        lastBeat: Date.now(), userId: userId, gameId: gameId, jobId: jobId, gameName: gameName || "Unknown Game"
     };
     res.json({ success: true });
 });
 
-// 3. Owner GUI sends command
 app.post('/send', (req, res) => {
     const { room, target, command } = req.body;
     if (!room || !target || !command) return res.status(400).json({ error: "Missing data" });
-    
     const r = getRoom(room);
     let cmdData = { target: target, command: command, timestamp: Date.now() };
     r.commands.push(cmdData);
-    
     if (r.commands.length > 100) r.commands.shift();
-    
     r.pollers.forEach(poller => {
         clearTimeout(poller.timeout);
         poller.res.json({ commands: [cmdData], cursor: Date.now() });
     });
     r.pollers = [];
-    
     res.json({ success: true });
 });
 
-// 4. Stand long-polls for commands
 app.get('/poll', (req, res) => {
     const roomName = req.query.room;
     const username = req.query.username;
     const cursor = parseInt(req.query.cursor) || 0;
-    
     if (!roomName || !username) return res.status(400).json({ error: "Missing data" });
     const room = getRoom(roomName);
-    
-    let newCmds = room.commands.filter(cmd => 
-        cmd.timestamp > cursor && (cmd.target === username || cmd.target === "ALL")
-    );
-    
-    if (newCmds.length > 0) {
-        return res.json({ commands: newCmds, cursor: Date.now() });
-    }
-    
+    let newCmds = room.commands.filter(cmd => cmd.timestamp > cursor && (cmd.target === username || cmd.target === "ALL"));
+    if (newCmds.length > 0) return res.json({ commands: newCmds, cursor: Date.now() });
     const timeout = setTimeout(() => {
         res.json({ commands: [], cursor: Date.now() });
         room.pollers = room.pollers.filter(p => p.res !== res);
     }, 25000);
-    
     room.pollers.push({ res: res, username: username, timeout: timeout });
 });
 
-// 5. NEW: Global Roster for Owner (Shows all stands across all servers)
 app.get('/global-roster', (req, res) => {
     let globalStands = [];
     let now = Date.now();
-    
     for (let roomName in rooms) {
         let room = rooms[roomName];
         for (let name in room.stands) {
             if (now - room.stands[name].lastBeat < 10000) {
                 globalStands.push({
-                    username: name,
-                    gameId: room.stands[name].gameId,
-                    jobId: room.stands[name].jobId,
-                    gameName: room.stands[name].gameName
+                    username: name, userId: room.stands[name].userId, gameId: room.stands[name].gameId, 
+                    jobId: room.stands[name].jobId, gameName: room.stands[name].gameName
                 });
             }
         }
