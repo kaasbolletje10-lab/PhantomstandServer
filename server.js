@@ -50,19 +50,20 @@ app.post('/send', (req, res) => {
     res.json({ success: true });
 });
 
+// 4. Stand polls for commands (Instant response, no long-polling)
 app.get('/poll', (req, res) => {
     const roomName = req.query.room;
     const username = req.query.username;
     const cursor = parseInt(req.query.cursor) || 0;
+    
     if (!roomName || !username) return res.status(400).json({ error: "Missing data" });
     const room = getRoom(roomName);
-    let newCmds = room.commands.filter(cmd => cmd.timestamp > cursor && (cmd.target === username || cmd.target === "ALL"));
-    if (newCmds.length > 0) return res.json({ commands: newCmds, cursor: Date.now() });
-    const timeout = setTimeout(() => {
-        res.json({ commands: [], cursor: Date.now() });
-        room.pollers = room.pollers.filter(p => p.res !== res);
-    }, 25000);
-    room.pollers.push({ res: res, username: username, timeout: timeout });
+    
+    let newCmds = room.commands.filter(cmd => 
+        cmd.timestamp > cursor && (cmd.target === username || cmd.target === "ALL")
+    );
+    
+    res.json({ commands: newCmds, cursor: Date.now() });
 });
 
 app.get('/global-roster', (req, res) => {
